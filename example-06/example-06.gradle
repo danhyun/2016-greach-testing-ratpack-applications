@@ -1,0 +1,25 @@
+plugins {
+  id 'io.ratpack.ratpack-groovy' version '1.2.0'
+}
+
+repositories {
+  jcenter()
+}
+
+ext {
+  log4j = '2.4'
+}
+
+dependencies {
+  runtime "org.apache.logging.log4j:log4j-slf4j-impl:${log4j}"
+  runtime "org.apache.logging.log4j:log4j-api:${log4j}"
+  runtime "org.apache.logging.log4j:log4j-core:${log4j}"
+  runtime 'com.lmax:disruptor:3.3.2'
+
+  // tag::deps[]
+  testCompile ratpack.dependency('remote-test')
+  // end::deps[]
+  testCompile ('org.spockframework:spock-core:1.0-groovy-2.4') {
+    exclude module: "groovy-all"
+  }
+}

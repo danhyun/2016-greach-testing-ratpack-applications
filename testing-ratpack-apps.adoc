@@ -1,0 +1,368 @@
+= Testing Ratpack Applications
+Dan Hyun <@LSpacewalker>
+
+Ratpack is a developer friendly and productivity focused web framework.
+That's quite a claim to make.
+We'll explore how Ratpack's rich testing facilities strongly support this statement.
+
+== Intro
+
+* Test framework Agnostic (Spock, JUnit, TestNG)
+* Core fixutres in Java 8+, first-class Groovy Support available
+* Most fixtures implement `java.lang.AutoCloseable`
+** Need to either close yourself or use in `try-with-resources`
+** Provides points of interaction that utilize an execute around pattern in cases where you need the fixture once.
+
+== Hello World
+
+=== Dependencies
+
+[source, gradle]
+.testing-ratpack-apps.gradle
+----
+include::example-01/example-01.gradle[tags=head;dependencies]
+----
+<1> Use Gradle's incubating Plugins feature
+<2> Pull in and apply Ratpack's Gradle plugin from Gradle's Plugin Portal
+<3> Pull in `'io.ratpack:ratpack-groovy-test` from Bintray
+
+=== Hello World Under Test
+
+[source, groovy]
+.ratpack.groovy
+----
+include::example-01/src/ratpack/ratpack.groovy[]
+----
+
+[source, groovy]
+.MainClassApp
+----
+include::example-01/src/main/groovy/MainClassApp.groovy[]
+----
+
+=== Verify
+
+[source, bash]
+----
+$ curl localhost:5050
+Hello Greach 2016!
+----
+
+== `assert true`
+
+=== Spock Hello World
+
+[source, groovy]
+.HelloWorldSpec.groovy
+----
+include::example-01/src/test/groovy/HelloWorldSpec.groovy[]
+----
+
+=== Junit Test
+
+[source, groovy]
+.HelloJunitTest.groovy
+----
+include::example-01/src/test/groovy/HelloJunitTest.groovy[]
+----
+
+== Unit testing
+
+=== `GroovyRequestFixture`
+
+==== Testing Standalone Handlers
+
+[source, groovy]
+.ImportantHandler.groovy
+----
+include::example-02/src/main/groovy/ImportantHandler.groovy[]
+----
+
+[source, groovy]
+.ratpack.groovy
+----
+include::example-02/src/ratpack/ratpack.groovy[]
+----
+<1> Bind our `ImportantHandler` to `GET /`
+
+[source, groovy]
+.Failing test
+----
+def 'should render \'Very important handler\''() {
+  when:
+  HandlingResult result = GroovyRequestFixture.handle(new ImportantHandler()) {}
+
+  then:
+  result.bodyText == 'Very important handler // <1>
+}
+----
+<1> Consult the `HandlingResult` for response body
+
+WARN: This test will fail
+
+What happened?
+
+`Context#render(Object)` uses Ratpack's rendering framework.
+`GroovyRequestFixture` does not actually serialize rendered objects to `Response` of `HandlingResult`.
+For this test to pass you must either modify the Handler or modify the expectation:
+
+Modify the handler:
+
+[source, groovy]
+.ImportantSendingHandler.groovy
+----
+include::example-02/src/main/groovy/ImportantSendingHandler.groovy[]
+----
+
+Modify the expectation:
+
+[source, groovy]
+.ImportantHandlerUnitSpec.groovy
+----
+include::example-02/src/test/groovy/ImportantHandlerUnitSpec.groovy[tag=rendering-spec]
+----
+<1> Retrieve the rendered object by type from `HandlingResult`
+
+Everday use:
+
+==== Modify request attributes
+
+[source,groovy]
+.HeaderExtractionHandler.groovy
+----
+include::example-02/src/main/groovy/HeaderExtractionHandler.groovy[]
+----
+<1> Extract HTTP header and render a response to client
+
+
+[source,groovy]
+.HeaderExtractionHandlingSpec.groovy
+----
+include::example-02/src/test/groovy/HeaderExtractionHandlingSpec.groovy[]
+----
+<1> You can get a chance to configure the properties of the request to be made, can configure HTTP method, headers, request body, etc.
+
+==== Modify and make assertions against context registry:
+
+[source, groovy]
+.ProfileLoadingHandler.groovy
+----
+include::example-02/src/main/groovy/ProfileLoadingHandler.groovy[]
+----
+<1> Extract role from request header, defaulting to 'guest'
+<2> Extract a String from the context registry
+<3> Delegate to the next Handler in the chain and pass a new single Registry with a newly constructed Profile object
+
+We can make use of `RequestFixture` to populate the Registry with any entries our stand-alone Handler may be expecting, such as a token in the form of a String.
+
+[source, groovy]
+.ProfileLoadingHandlingSpec.groovy
+----
+include::example-02/src/test/groovy/ProfileLoadingHandlingSpec.groovy[tag=registry]
+----
+<1> Use `RequestFixture#header` to add Headers to the HTTP Request
+<2> Use `RequestFixture#registry` to add a `String` to the Context registry
+<3> Consult the HandlingResponse to ensure that the context was populated with a `Profile` object and that it meets our expectations
+
+
+Let's put our `ProfileLoadingHandler` in a chain with a dummy Map renderer:
+[source, groovy]
+.ProfileLoadingHandlingSpec.groovy
+----
+include::example-02/src/test/groovy/ProfileLoadingHandlingSpec.groovy[tag=chain]
+----
+
+== `GroovyEmbeddedApp`
+
+`GroovyEmbeddedApp` represents an isolated subset of functionality that stands up a full Ratpack server. 
+
+It represents a very bare server that binds to an ephemeral port and has no base directory by default.
+`GroovyEmbeddedApp` is also `AutoCloseable`.
+If you plan on making more than a few interactions it may help to grab a `TestHttpClient` from the server, otherwise you can make use of `EmbeddedApp#test(TestHttpClient)` which will ensure that the `EmbeddedApp` is shut down gracefully.
+Javadocs for Ratpack are 100% tested and make use of `EmbeddedApp` to demonstrate functionality.
+
+The `EmbeddedApp` is also useful in creating a test fixture that represents some network based resource that returns canned or contrived responses.
+
+[source, groovy]
+.EmbeddedAppSpec
+----
+include::example-03/src/test/groovy/EmbeddedAppSpec.groovy[tag=hello-world]
+----
+<1> Creates a full Ratpack server with a single handler
+<2> Ratpack provides us with a `TestHttpClient` that is configured to submit requests to `EmbeddedApp`. When the closure is finished executing Ratpack will take care of cleaning up the `EmbeddedApp`.
+
+== TestHttpClient
+
+For testing, Ratpack provides `TestHttpClient` which is a blocking, synchronous http client for making requests against a running `ApplicationUnderTest`. This is intentionally designed in order to make testing deterministic and predictable.
+
+[source, groovy]
+.EmbeddedAppSpec
+----
+include::example-03/src/test/groovy/EmbeddedAppSpec.groovy[tag=client]
+----
+<1> Create `GroovyEmbeddedApp` from a chain
+<2> Retrieve a configured `TestHttpClient` for making requests against the `EmbeddedApp`
+<3> Make some assertions about the application as described by the chain
+<4> Have Spock invoke `EmbeddedApp#close` to gracefully shutdown the server.
+
+The `TestHttpClient` has some basic support for manipulating request configuration as well as handling redirects and cookies.
+
+[source, groovy]
+.EmbeddedAppSpec
+----
+include::example-03/src/test/groovy/EmbeddedAppSpec.groovy[tag=request-config]
+----
+<1> Create sample app that reads and writes cookies
+<2> Issue requests that ensures cookie setting/expiring and redirect functionality
+
+
+== Async Testing
+
+Ratpack is asynchronous and non-blocking from the ground up. This means that not only is Ratpack's api asynchronous but it expects that your code should be asynchronous as well.
+
+Let's say we have a `ProfileService` that's responsible for retrieving `Profile`s:
+
+[source, groovy]
+.ProfileService.groovy
+----
+include::example-04/src/main/groovy/ProfileService.groovy[]
+----
+
+If you were to test this Service without any assistance from Ratpack you will run into the well known `UnmanagedThreadException`:
+
+----
+ratpack.exec.UnmanagedThreadException: Operation attempted on non Ratpack managed thread
+----
+
+=== ExecHarness
+
+`ExecHarness` is the utility that Ratpack provides to test any kind of asynchronous behavior.
+Unsurprisingly `ExecHarness` is also an `AutoCloseable`.
+It utilizes resources that manage an `EventLoopGroup` and an `ExecutorService` so it's important to make sure these resources get properly cleaned up.
+
+[source, groovy]
+.ProfileServiceExec.groovy
+----
+include::example-04/src/test/groovy/ProfileServiceSpec.groovy[]
+----
+<1> Create an `ExecHarness` and tell Spock to clean up when we are finished
+<2> Use `ExecHarness#yield` to wrap all of our service calls so that our Promises and Operations can be resolved on a Ratpack managed thread.
+
+== Functional testing
+
+=== MainClassApplicationUnderTest
+
+`GroovyRatpackMainApplicationUnderTest`::
+For testing `ratpack.groovy` backed applications
+
+[source, groovy]
+----
+include::example-01/src/test/groovy/HelloWorldSpec.groovy[tag=GroovyScriptAUT]
+----
+
+`MainClassApplicationUnderTest`::
+For testing class backed applications
+
+[source, groovy]
+----
+include::example-01/src/test/groovy/HelloWorldSpec.groovy[tag=MainClassAUT]
+----
+
+Our sample Ratpack application for testing:
+
+[source, groovy]
+.ratpack.groovy
+----
+include::example-05/src/ratpack/ratpack.groovy[]
+----
+<1> Pull configuration from System properties
+<2> Create an ApiConfig object and put into the registry
+<3> Bind `ConfService` using Guice
+<4> Use `ConfService` to retrieve list of awesome Groovy Conferences
+
+[source, groovy]
+.ApiConfig.groovy
+----
+include::example-05/src/main/groovy/ApiConfig.groovy[]
+----
+
+Simple object to contain our configuration data related to an API
+
+[source, groovy]
+.ConfService
+----
+include::example-05/src/main/groovy/ConfService.groovy[]
+----
+<1> Receive `ApiConfig` and `HtpClient` from Guice
+<2> Define an asynchronous service method to retrieve data from remote service
+
+=== Configuration
+
+We can take advantage of system properties to change how the Ratpack application configures its services.
+
+[source, groovy]
+.FunctionalSpec.groovy
+----
+include::example-05/src/test/groovy/FunctionalSpec.groovy[]
+----
+<1> Create our `ApplicationUnderTest` and tell Spock to clean up when we're done
+<2> Retrieve `TestHttpClient` and make use of `@Delegate` to make tests very readable
+<3> Create a simple service that response with a comma separated list of Groovy Conferences
+<4> Set system property to point to our stubbed service
+<5> Write a simple test to assure that our Ratpack app can make a succcessful call to the remote api
+
+=== Impositions
+
+`Impositions` allow a user to provide overrides to various aspects of the Ratpack application bootstrap phase.
+
+* `ServerConfigImposition` allows to override server configuration
+* `BindingsImposition` allows to provide Guice binding overrides 
+* `UserRegistryImposition` allows you to provide alternatives for items in the registry
+
+[source, groovy]
+.ImpositionSpec
+----
+include::example-05/src/test/groovy/ImpositionSpec.groovy[]
+----
+<1> Override `addImpositions` method to provide a `UserRegistryImposition` that supplies our own dumb implementation of `ConfService` that does not need to make any network connections
+
+=== RemoteControl
+
+Authored by Luke Daley; originally for Grails
+
+Used to serialize commands to be executed on the `ApplicationUnderTest`
+
+[source, groovy]
+.build.gradle
+----
+include::example-06/example-06.gradle[tag=deps]
+----
+Here we add a test compile dependency on `io.ratpack:ratpack-remote-test` which includes a dependency on `remote-control`
+
+[source, groovy]
+.RemoteControlSpec.groovy
+----
+include::example-06/src/test/groovy/RemoteControlSpec.groovy[]
+----
+<1> We use `BindingsImposition` here to add a hook into the running `ApplicationUnderTest` that allows us to run remote code on the server
+<2> We tell `RemoteControl` not to complain if the result of the command is not Serializable
+<3> We use remote control here to grab the `ProfileService` and manually add a profile
+
+=== EphemeralBaseDir
+
+A utility that provides a nice way to interact with files that would provide the basis of a base directory for Ratpack applications.
+It is also an `AutoCloseable` so you'll need to make sure to clean up after use.
+
+[source, groovy]
+.EphemeralSpec.groovy
+----
+include::example-07/src/test/groovy/EphemeralSpec.groovy[]
+----
+
+== Resources
+
+* http://shop.oreilly.com/product/0636920037545.do[(book) O'Reilly: Learning Ratpack by Dan Woods]
+* https://ratpack.io/manual/current/api/ratpack/test/package-summary.html[(javadocs) Ratpack Test]
+* https://ratpack.io/manual/current/api/ratpack/groovy/test/package-summary.html[(javadocs) Ratpack Groovy Test]
+* https://ratpack.io/manual/current/api/ratpack/remote/package-summary.html[(javadocs) Ratpack Remote]
+* https://ratpack.io/manual/current/api/ratpack/test/remote/package-summary.html[(javadocs) Ratpack Remote Test]
